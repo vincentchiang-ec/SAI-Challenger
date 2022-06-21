@@ -13,6 +13,119 @@ ASIC_TYPE=""
 ASIC_PATH=""
 TARGET=""
 
+generateTargetServise() {
+    local TARGET=$1
+    echo """[Unit]
+Description=SAI Chalanger container
+
+Requires=docker.service
+After=docker.service
+After=rc-local.service
+StartLimitIntervalSec=1200
+StartLimitBurst=3
+
+[Service]
+User=root
+ExecStartPre=/usr/bin/sc_${TARGET}.sh start
+ExecStart=/usr/bin/sc_${TARGET}.sh wait
+ExecStop=/usr/bin/sc_${TARGET}.sh stop
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+""" > sc_${TARGET}.service
+}
+
+generateTargetScript() {
+    local ASIC=$1
+    local TARGET=$2
+    echo """#!/bin/bash
+start(){
+    docker inspect --type container \${DOCKERNAME} 2>/dev/null > /dev/null
+    if [ \"\$?\" -eq \"0\" ]; then
+        echo \"Starting existing \${DOCKERNAME} container\"
+        docker start \${DOCKERNAME}
+        exit $?
+    fi
+    echo \"Creating new \${DOCKERNAME} container\"
+    docker create --privileged -t \\
+        -v /host/machine.conf:/etc/machine.conf \\
+        -v /host/warmboot:/var/warmboot \\
+        --name \${DOCKERNAME} \\
+        -p 6379:6379 \\
+        sc-server-\${ASIC}-\${TARGET}
+
+    echo \"Starting \${DOCKERNAME} container\"
+    docker start \${DOCKERNAME}
+}
+wait() {
+    docker wait \${DOCKERNAME}
+}
+stop() {
+    echo \"Stoping \${DOCKERNAME} container\"
+    docker stop \${DOCKERNAME}
+}
+
+DOCKERNAME=sai-challenger
+ASIC=${ASIC}
+TARGET=${TARGET}
+
+case \"\$1\" in
+    start|wait|stop)
+        \$1
+        ;;
+    *)
+        echo \"Usage: \$0 {start|wait|stop}\"
+        exit 1
+        ;;
+esac
+""" > sc_${TARGET}.sh
+}
+
+generateInstallScript() {
+    local TARGET=$1
+    echo """#!/bin/bash
+if [ -z \"\$1\" ]; then
+    echo \"Need to specify DUT IP\"
+    exit 1
+fi
+SSH=\"sshpass -p YourPaSsWoRd ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR admin@\$1\"
+sshpass -p YourPaSsWoRd scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR sc-server.tgz admin@\$1:/home/admin/
+\$SSH tar zxf sc-server.tgz
+\$SSH rm sc-server.tgz
+\$SSH docker load -i sc-server-${TARGET}.tgz
+\$SSH rm sc-server-${TARGET}.tgz
+\$SSH sudo mv sc_${TARGET}.service /usr/lib/systemd/system/
+\$SSH sudo mv sc_${TARGET}.sh /usr/bin/
+\$SSH sudo mv /etc/sonic/generated_services.conf /etc/sonic/generated_services.conf.bak
+\$SSH sudo mv generated_services.conf /etc/sonic/
+\$SSH sudo mv /usr/bin/database.sh /usr/bin/database.sh.bak
+\$SSH sudo reboot
+""" > sc_install.sh
+}
+
+generateRemoveScript() {
+    local ASIC=$1
+    local TARGET=$2
+    echo """#!/bin/bash
+if [ -z \"\$1\" ]; then
+    echo \"Need to specify DUT IP\"
+    exit 1
+fi
+SSH=\"sshpass -p YourPaSsWoRd ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR admin@\$1\"
+\$SSH sudo rm /usr/lib/systemd/system/sc_${TARGET}.service
+\$SSH sudo rm /usr/bin/sc_${TARGET}.sh
+\$SSH docker stop sai-challenger
+\$SSH docker rm sai-challenger
+\$SSH docker rmi sc-server-${ASIC}-${TARGET}
+\$SSH sudo rm /etc/sonic/generated_services.conf
+\$SSH sudo mv /etc/sonic/generated_services.conf.bak /etc/sonic/generated_services.conf
+\$SSH sudo mv /usr/bin/database.sh.bak /usr/bin/database.sh
+\$SSH sudo reboot
+""" > sc_remove.sh
+}
+
 print-help() {
     echo
     echo "$(basename ""$0"") [OPTIONS]"
@@ -122,4 +235,21 @@ elif [ "${IMAGE_TYPE}" = "server" ]; then
 fi
 popd
 
+# Save target Docker image and generate service/script files
+if [ "${IMAGE_TYPE}" = "server" ]; then
+    docker save sc-server-${ASIC_TYPE}-${TARGET} | gzip > sc-server-${TARGET}.tgz
+    generateTargetServise ${TARGET}
+    generateTargetScript ${ASIC_TYPE} ${TARGET}
+    chmod +x sc_${TARGET}.sh
+    echo "sc_${TARGET}.service" > generated_services.conf
+    tar zcf sc-server.tgz sc-server-${TARGET}.tgz sc_${TARGET}.service sc_${TARGET}.sh generated_services.conf
+    rm sc-server-${TARGET}.tgz sc_${TARGET}.service sc_${TARGET}.sh generated_services.conf
+
+    generateInstallScript ${TARGET}
+    chmod +x sc_install.sh
+    generateRemoveScript ${ASIC_TYPE} ${TARGET}
+    chmod +x sc_remove.sh
+    tar cf sc-server-pack.tar sc-server.tgz sc_install.sh sc_remove.sh
+    rm sc-server.tgz sc_install.sh sc_remove.sh
+fi
 
