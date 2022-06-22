@@ -41,6 +41,8 @@ generateTargetScript() {
     local ASIC=$1
     local TARGET=$2
     echo """#!/bin/bash
+HWSKU=\`grep HWSKU /home/admin/sonic_env | cut -d \"=\" -f2\`
+PLATFORM=\`grep PLATFORM /home/admin/sonic_env | cut -d \"=\" -f2\`
 start(){
     docker inspect --type container \${DOCKERNAME} 2>/dev/null > /dev/null
     if [ \"\$?\" -eq \"0\" ]; then
@@ -52,6 +54,7 @@ start(){
     docker create --privileged -t \\
         -v /host/machine.conf:/etc/machine.conf \\
         -v /host/warmboot:/var/warmboot \\
+        -v /usr/share/sonic/device/\${PLATFORM}/\${HWSKU}:/usr/share/sonic/hwsku:ro \\
         --name \${DOCKERNAME} \\
         -p 6379:6379 \\
         sc-server-\${ASIC}-\${TARGET}
@@ -91,6 +94,7 @@ if [ -z \"\$1\" ]; then
     exit 1
 fi
 SSH=\"sshpass -p YourPaSsWoRd ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR admin@\$1\"
+\$SSH \"sudo sonic-cfggen -d -t /usr/share/sonic/templates/sonic-environment.j2 > sonic_env\"
 sshpass -p YourPaSsWoRd scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR sc-server.tgz admin@\$1:/home/admin/
 \$SSH tar zxf sc-server.tgz
 \$SSH rm sc-server.tgz

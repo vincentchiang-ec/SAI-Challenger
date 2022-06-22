@@ -36,8 +36,6 @@ RUN cd /sai/gen_attr_list \
         && ./attr_list_generator > /etc/sai/sai.json
 
 # Setup supervisord
-COPY configs/td3-as7726-32x100G.config.bcm /usr/share/sonic/hwsku/td3-as7726-32x100G.config.bcm
-COPY configs/sai.profile /etc/sai.d/sai.profile
 COPY configs/server/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY configs/server/syncd.sh /usr/bin/syncd.sh
 RUN chmod +x /usr/bin/syncd.sh
